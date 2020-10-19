@@ -14,6 +14,7 @@
       @keyup.enter="go(focusIndex)"
       @keyup.up="onUp"
       @keyup.down="onDown"
+      @keypress="onPress"
     />
     <ul v-if="showSuggestions" class="suggestions" :class="{ 'align-right': alignRight }" @mouseleave="unfocus">
       <li
@@ -30,7 +31,7 @@
             <div class="page-title">{{ s.title || s.path }}</div>
             <div class="suggestion-content">
               <div v-if="s.headingStr" class="header">{{ s.headingStr }}</div>
-              <div v-if="s.contentStr">{{ s.contentStr }}</div>
+              <div v-if="s.contentStr" v-html="highlightWord(s.contentStr)"></div>
             </div>
           </div>
         </a>
@@ -51,6 +52,7 @@ export default {
       focusIndex: 0,
       placeholder: undefined,
       suggestions: null,
+      canSubmit: false
     }
   },
   computed: {
@@ -149,13 +151,17 @@ export default {
         }
       }
     },
+    onPress() {
+      this.canSubmit = true
+    },
     go(i) {
-      if (!this.showSuggestions) {
+      if (!this.showSuggestions || !this.canSubmit) {
         return
       }
       this.$router.push(this.suggestions[i].path + this.suggestions[i].slug)
       this.query = ''
       this.focusIndex = 0
+      this.canSubmit = false
     },
     focus(i) {
       this.focusIndex = i
@@ -163,6 +169,10 @@ export default {
     unfocus() {
       this.focusIndex = -1
     },
+    highlightWord(contents) {
+      const regex = new RegExp('(' + this.query + ')', 'gim');
+      return contents.replace(regex, '<span class="highlight">$1</span>')
+    }
   },
 }
 </script>
@@ -200,6 +210,8 @@ export default {
     border-radius 6px
     padding 0.4rem
     list-style-type none
+    max-height calc(100vh - 5.6rem)
+    overflow: scroll
     &.align-right
       right 0
   .suggestion
@@ -244,6 +256,11 @@ export default {
 
     &.focused
       background-color #f3f4f5
+    
+    span.highlight
+      background-color #ffff00
+      font-weight bold
+
 @media (max-width: $MQNarrow)
   .search-box
     input
