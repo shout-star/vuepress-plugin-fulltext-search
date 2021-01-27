@@ -14,6 +14,7 @@
       @keyup.enter="go(focusIndex)"
       @keyup.up="onUp"
       @keyup.down="onDown"
+      @keypress="onPress"
     />
     <ul v-if="showSuggestions" class="suggestions" :class="{ 'align-right': alignRight }" @mouseleave="unfocus">
       <li
@@ -21,7 +22,7 @@
         :key="i"
         class="suggestion"
         :class="{ focused: i === focusIndex }"
-        @mousedown="go(i)"
+        @mousedown="goOnClick(i)"
         @mouseenter="focus(i)"
       >
         <a :href="s.path + s.slug" @click.prevent>
@@ -29,14 +30,8 @@
           <div class="suggestion-row">
             <div class="page-title">{{ s.title || s.path }}</div>
             <div class="suggestion-content">
-              <!-- prettier-ignore -->
-              <div v-if="s.headingStr" class="header">
-                {{ s.headingDisplay.prefix }}<span class="highlight">{{ s.headingDisplay.highlightedContent }}</span>{{ s.headingDisplay.suffix }}
-              </div>
-              <!-- prettier-ignore -->
-              <div v-if="s.contentStr">
-                {{ s.contentDisplay.prefix }}<span class="highlight">{{ s.contentDisplay.highlightedContent }}</span>{{ s.contentDisplay.suffix }}
-              </div>
+              <div v-if="s.headingStr" class="header" v-html="highlightWord(s.headingStr)"></div>
+              <div v-if="s.contentStr" v-html="highlightWord(s.contentStr)"></div>
             </div>
           </div>
         </a>
@@ -61,6 +56,7 @@ export default {
       focusIndex: 0,
       placeholder: undefined,
       suggestions: null,
+      canSubmit: false,
     }
   },
   computed: {
@@ -172,7 +168,19 @@ export default {
         }
       }
     },
+    onPress(e) {
+      this.canSubmit = true
+    },
+    goOnClick(i) {
+      this.canSubmit = true
+      this.go(i)
+    },
     go(i) {
+      if (!this.canSubmit) {
+        this.canSubmit = true
+        return
+      }
+      this.canSubmit = false
       if (!this.showSuggestions) {
         return
       }
@@ -180,13 +188,17 @@ export default {
         const result = hooks.onGoToSuggestion(i, this.suggestions[i], this.query, this.queryTerms)
         if (result === true) return
       }
+      if (!this.suggestions[i]) {
+        return
+      }
       if (this.suggestions[i].external) {
         window.open(this.suggestions[i].path + this.suggestions[i].slug, '_blank')
       } else {
         this.$router.push(this.suggestions[i].path + this.suggestions[i].slug)
-        this.query = ''
+        // this.query = ''
         this.focusIndex = 0
         this.focused = false
+        this.$refs.input.blur()
 
         // reset query param
         const params = this.urlParams()
@@ -210,10 +222,18 @@ export default {
       }
       return new URLSearchParams(window.location.search)
     },
+    highlightWord(contents) {
+      const regex = new RegExp('(' + this.query + ')', 'gim')
+      return contents.replace(regex, '<span class="highlight">$1</span>')
+    },
   },
 }
 
 function highlight(str, strHighlight) {
+  console.log({
+    str,
+    strHighlight,
+  })
   if (!str) return {}
   if (!strHighlight) return { prefix: str }
   const [start, length] = strHighlight
@@ -261,6 +281,8 @@ function highlight(str, strHighlight) {
     border-radius 6px
     padding 0.4rem
     list-style-type none
+    max-height calc(100vh - 5.6rem)
+    overflow: scroll
     &.align-right
       right 0
   .suggestion
@@ -295,7 +317,8 @@ function highlight(str, strHighlight) {
           font-weight 600
         .suggestion-content
           .highlight
-            text-decoration: underline
+            background-color #ffff00
+            font-weight bold
           border 1px solid $borderColor
           font-weight 400
           border-right none
