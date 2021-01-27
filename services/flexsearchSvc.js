@@ -9,11 +9,13 @@ let cyrillicIndex = null
 let cjkIndex = null
 let pagesByPath = null
 
-const cjkRegex = /[\u3131-\u314e|\u314f-\u3163|\uac00-\ud7a3]|[\u4E00-\u9FCC\u3400-\u4DB5\uFA0E\uFA0F\uFA11\uFA13\uFA14\uFA1F\uFA21\uFA23\uFA24\uFA27-\uFA29]|[\ud840-\ud868][\udc00-\udfff]|\ud869[\udc00-\uded6\udf00-\udfff]|[\ud86a-\ud86c][\udc00-\udfff]|\ud86d[\udc00-\udf34\udf40-\udfff]|\ud86e[\udc00-\udc1d]/giu
+const cjkRegex = /[\u3131-\u314e|\u314f-\u3163|\uac00-\ud7a3]|[\u4E00-\u9FCC\u3400-\u4DB5\uFA0E\uFA0F\uFA11\uFA13\uFA14\uFA1F\uFA21\uFA23\uFA24\uFA27-\uFA29]|[\ud840-\ud868][\udc00-\udfff]|\ud869[\udc00-\uded6\udf00-\udfff]|[\ud86a-\ud86c][\udc00-\udfff]|\ud86d[\udc00-\udf34\udf40-\udfff]|\ud86e[\udc00-\udc1d]|[\u3041-\u3096]|[\u30A1-\u30FA]/giu
 
 export default {
-  buildIndex(pages) {
+  buildIndex(allPages) {
+    const pages = allPages.filter(p => !p.frontmatter || p.frontmatter.search !== false)
     const indexSettings = {
+      encode: 'simple',
       tokenize: 'forward',
       async: true,
       doc: {
@@ -86,7 +88,7 @@ export default {
     const result = searchResult.map(page => ({
       ...page,
       parentPageTitle: getParentPageTitle(page),
-      ...getAdditionalInfo(page, queryString, queryTerms),
+      ...getAdditionalInfo(page, normalizeString(queryString), queryTerms),
     }))
 
     const resultByParent = _.groupBy(result, 'parentPageTitle')
@@ -99,6 +101,7 @@ export default {
       )
       .flat()
   },
+  normalizeString,
 }
 
 function getParentPageTitle(page) {
@@ -115,7 +118,7 @@ function getAdditionalInfo(page, queryString, queryTerms) {
   const match = getMatch(page, query, queryTerms)
   if (!match)
     return {
-      headingStr: getFullHeading(page),
+      ...getFullHeading(page),
       slug: '',
       contentStr: null,
     }
@@ -123,7 +126,7 @@ function getAdditionalInfo(page, queryString, queryTerms) {
   if (match.headerIndex != null) {
     // header match
     return {
-      headingStr: getFullHeading(page, match.headerIndex),
+      ...getFullHeading(page, match.headerIndex, match),
       slug: '#' + page.headers[match.headerIndex].slug,
       contentStr: null,
     }
@@ -134,14 +137,14 @@ function getAdditionalInfo(page, queryString, queryTerms) {
   if (headerIndex === -1) headerIndex = null
 
   return {
-    headingStr: getFullHeading(page, headerIndex),
+    ...getFullHeading(page, headerIndex),
     slug: headerIndex == null ? '' : '#' + page.headers[headerIndex].slug,
-    contentStr: getContentStr(page, match),
+    ...getContentStr(page, match),
   }
 }
 
-function getFullHeading(page, headerIndex) {
-  if (headerIndex == null) return page.title
+function getFullHeading(page, headerIndex, match) {
+  if (headerIndex == null) return { headingStr: page.title }
   const headersPath = []
   while (headerIndex != null) {
     const header = page.headers[headerIndex]
@@ -149,7 +152,12 @@ function getFullHeading(page, headerIndex) {
     headerIndex = _.findLastIndex(page.headers, h => h.level === header.level - 1, headerIndex - 1)
     if (headerIndex === -1) headerIndex = null
   }
-  return headersPath.map(h => h.title).join(' > ')
+
+  const headingStr = headersPath.map(h => h.title).join(' > ')
+  const prefixPath = headersPath.slice(0, -1)
+  const prefixLength = _.sum(prefixPath.map(p => (p.title || '').length)) + prefixPath.length * 3
+  const headingHighlight = match && match.headerIndex != null && [match.charIndex + prefixLength, match.termLength]
+  return { headingStr, headingHighlight }
 }
 
 function getMatch(page, query, terms) {
@@ -171,7 +179,7 @@ function getHeaderMatch(page, term) {
   if (!page.headers) return null
   for (let i = 0; i < page.headers.length; i++) {
     const h = page.headers[i]
-    const charIndex = h.title.toLowerCase().indexOf(term)
+    const charIndex = h.normalizedTitle.indexOf(term)
     if (charIndex === -1) continue
     return {
       headerIndex: i,
@@ -183,8 +191,8 @@ function getHeaderMatch(page, term) {
 }
 
 function getContentMatch(page, term) {
-  if (!page.contentLowercase) return null
-  const charIndex = page.contentLowercase.indexOf(term)
+  if (!page.normalizedContent) return null
+  const charIndex = page.normalizedContent.indexOf(term)
   if (charIndex === -1) return null
 
   return { headerIndex: null, charIndex, termLength: term.length }
@@ -201,16 +209,33 @@ function getContentStr(page, match) {
   if (lineEndIndex === -1) lineEndIndex = page.content.length
 
   const line = page.content.slice(lineStartIndex, lineEndIndex)
-
-  if (snippetLength >= line.length) return line
-
   const lineCharIndex = charIndex - lineStartIndex
+  const contentHighlight = [lineCharIndex, termLength]
 
-  const additionalCharactersFromStart = (snippetLength - termLength) / 2
+  if (snippetLength >= line.length) return { contentStr: line, contentHighlight }
+
+  const additionalCharactersFromStart = _.round((snippetLength - termLength) / 2)
   const snippetStart = Math.max(lineCharIndex - additionalCharactersFromStart, 0)
   const snippetEnd = Math.min(snippetStart + snippetLength, line.length)
-  let result = line.slice(snippetStart, snippetEnd)
-  if (snippetStart > 0) result = '...' + result
-  if (snippetEnd < line.length) result = result + '...'
-  return result
+  let contentStr = line.slice(snippetStart, snippetEnd)
+  contentHighlight[0] = contentHighlight[0] - snippetStart
+
+  if (snippetStart > 0) {
+    contentStr = '...' + contentStr
+    contentHighlight[0] = contentHighlight[0] + 3
+  }
+  if (snippetEnd < line.length) contentStr = contentStr + '...'
+  return {
+    contentStr,
+    contentHighlight,
+  }
+}
+
+function normalizeString(str) {
+  if (!str) return str
+  return str
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
 }

@@ -25,12 +25,18 @@
         @mouseenter="focus(i)"
       >
         <a :href="s.path + s.slug" @click.prevent>
-          <div v-if="s.parentPageTitle" class="parent-page-title" v-html="highlight(s.parentPageTitle)" />
+          <div v-if="s.parentPageTitle" class="parent-page-title" v-html="s.parentPageTitle" />
           <div class="suggestion-row">
             <div class="page-title">{{ s.title || s.path }}</div>
             <div class="suggestion-content">
-              <div v-if="s.headingStr" class="header">{{ s.headingStr }}</div>
-              <div v-if="s.contentStr">{{ s.contentStr }}</div>
+              <!-- prettier-ignore -->
+              <div v-if="s.headingStr" class="header">
+                {{ s.headingDisplay.prefix }}<span class="highlight">{{ s.headingDisplay.highlightedContent }}</span>{{ s.headingDisplay.suffix }}
+              </div>
+              <!-- prettier-ignore -->
+              <div v-if="s.contentStr">
+                {{ s.contentDisplay.prefix }}<span class="highlight">{{ s.contentDisplay.highlightedContent }}</span>{{ s.contentDisplay.suffix }}
+              </div>
             </div>
           </div>
         </a>
@@ -41,6 +47,10 @@
 
 <script>
 import flexsearchSvc from '../services/flexsearchSvc'
+
+// see https://vuepress.vuejs.org/plugin/option-api.html#clientdynamicmodules
+import hooks from '@dynamic/hooks'
+
 /* global SEARCH_MAX_SUGGESTIONS, SEARCH_PATHS, SEARCH_HOTKEYS */
 export default {
   name: 'SearchBox',
@@ -56,9 +66,8 @@ export default {
   computed: {
     queryTerms() {
       if (!this.query) return []
-      const result = this.query
-        .trim()
-        .toLowerCase()
+      const result = flexsearchSvc
+        .normalizeString(this.query)
         .split(/[^\p{L}\p{N}_]+/iu)
         .filter(t => t)
       return result
@@ -83,26 +92,40 @@ export default {
     flexsearchSvc.buildIndex(this.$site.pages)
     this.placeholder = this.$site.themeConfig.searchPlaceholder || ''
     document.addEventListener('keydown', this.onHotkey)
+
+    // set query from URL
+    const params = this.urlParams()
+    if (params) {
+      const query = params.get('query')
+      if (query) {
+        this.query = decodeURI(query)
+        this.focused = true
+      }
+    }
   },
   beforeDestroy() {
     document.removeEventListener('keydown', this.onHotkey)
   },
   methods: {
-    highlight(str) {
-      if (!this.queryTerms.length) return str
-      return str
-    },
     async getSuggestions() {
-      if (!this.query) return
-      if (!this.queryTerms.length) {
+      if (!this.query || !this.queryTerms.length) {
         this.suggestions = []
         return
       }
-      this.suggestions = await flexsearchSvc.match(
+      let suggestions = await flexsearchSvc.match(
         this.query,
         this.queryTerms,
         this.$site.themeConfig.searchMaxSuggestions || SEARCH_MAX_SUGGESTIONS,
       )
+      if (hooks.processSuggestions) {
+        // augment suggestions with user-provided function
+        suggestions = await hooks.processSuggestions(suggestions, this.query, this.queryTerms)
+      }
+      this.suggestions = suggestions.map(s => ({
+        ...s,
+        headingDisplay: highlight(s.headingStr, s.headingHighlight),
+        contentDisplay: highlight(s.contentStr, s.contentHighlight),
+      }))
     },
     getPageLocalePath(page) {
       for (const localePath in this.$site.locales || {}) {
@@ -153,9 +176,27 @@ export default {
       if (!this.showSuggestions) {
         return
       }
-      this.$router.push(this.suggestions[i].path + this.suggestions[i].slug)
-      this.query = ''
-      this.focusIndex = 0
+      if (hooks.onGoToSuggestion) {
+        const result = hooks.onGoToSuggestion(i, this.suggestions[i], this.query, this.queryTerms)
+        if (result === true) return
+      }
+      if (this.suggestions[i].external) {
+        window.open(this.suggestions[i].path + this.suggestions[i].slug, '_blank')
+      } else {
+        this.$router.push(this.suggestions[i].path + this.suggestions[i].slug)
+        this.query = ''
+        this.focusIndex = 0
+        this.focused = false
+
+        // reset query param
+        const params = this.urlParams()
+        if (params) {
+          params.delete('query')
+          const paramsString = params.toString()
+          const newState = window.location.pathname + (paramsString ? `?${paramsString}` : '')
+          history.pushState(null, '', newState)
+        }
+      }
     },
     focus(i) {
       this.focusIndex = i
@@ -163,7 +204,27 @@ export default {
     unfocus() {
       this.focusIndex = -1
     },
+    urlParams() {
+      if (!window.location.search) {
+        return null
+      }
+      return new URLSearchParams(window.location.search)
+    },
   },
+}
+
+function highlight(str, strHighlight) {
+  if (!str) return {}
+  if (!strHighlight) return { prefix: str }
+  const [start, length] = strHighlight
+  const end = start + length
+
+  const prefix = str.slice(0, start)
+  const highlightedContent = str.slice(start, end)
+  const suffix = str.slice(end)
+  return { prefix, highlightedContent, suffix }
+
+  // return `${prefix}<span class="highlight">${highlightedContent}</span>${suffix}`
 }
 </script>
 
@@ -233,6 +294,8 @@ export default {
           padding 5px
           font-weight 600
         .suggestion-content
+          .highlight
+            text-decoration: underline
           border 1px solid $borderColor
           font-weight 400
           border-right none
